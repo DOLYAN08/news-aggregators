@@ -1,0 +1,87 @@
+{
+  "name": "gmail_web_sender",
+  "description": "Массовая рассылка через Gmail Web UI + ruCaptcha + антидетект",
+  "version": "1.3",
+  "engine": 25,
+  "variables": [
+    {"name": "accounts", "type": "list", "value": []},
+    {"name": "proxies", "type": "list", "value": []},
+    {"name": "recipients", "type": "list", "value": []},
+    {"name": "curr_acc", "type": "string", "value": ""},
+    {"name": "curr_proxy", "type": "string", "value": ""},
+    {"name": "curr_mail", "type": "string", "value": ""},
+    {"name": "daily_sent", "type": "number", "value": 0},
+    {"name": "ruCaptchaKey", "type": "string", "value": "YOUR_RUCAPTCHA_KEY"},
+    {"name": "daily_limit", "type": "number", "value": 80}
+  ],
+  "resources": [],
+  "modules": [
+    {
+      "name": "read_files",
+      "commands": [
+        {"action": "resources.read", "file": "data\\accounts.txt", "encoding": "utf-8", "to": "accounts_raw"},
+        {"action": "resources.read", "file": "data\\proxy.txt", "encoding": "utf-8", "to": "proxies_raw"},
+        {"action": "resources.read", "file": "data\\mail.txt", "encoding": "utf-8", "to": "recipients_raw"},
+        {"action": "list.split", "list": "accounts_raw", "separator": "\\n", "to": "accounts"},
+        {"action": "list.split", "list": "proxies_raw", "separator": "\\n", "to": "proxies"},
+        {"action": "list.split", "list": "recipients_raw", "separator": "\\n", "to": "recipients"}
+      ]
+    },
+    {
+      "name": "auth_worker",
+      "thread_pool": 5,
+      "loop_list": "accounts",
+      "loop_var": "curr_acc",
+      "commands": [
+        {"action": "proxy.set", "proxy_string": "proxies[thread_id]", "type": "http"},
+        {"action": "fingerprint.randomize"},
+        {"action": "browser.start", "profile": "curr_acc", "size": "random", "webrtc": "disable"},
+        {"action": "page.navigate", "url": "https://mail.google.com"},
+        {"action": "wait.selector", "selector": "input[type=email]", "timeout": 15},
+        {"action": "element.type", "selector": "input[type=email]", "text": "curr_acc.split(':')[0]"},
+        {"action": "element.click", "selector": "#identifierNext"},
+        {"action": "wait.selector", "selector": "input[type=password]", "timeout": 15},
+        {"action": "element.type", "selector": "input[type=password]", "text": "curr_acc.split(':')[1]"},
+        {"action": "element.click", "selector": "#passwordNext"},
+        {"action": "captcha.solve", "service": "rucaptcha", "key": "ruCaptchaKey", "timeout": 120},
+        {"action": "wait.selector", "selector": "[role=main] table", "timeout": 25},
+        {"action": "browser.save_session", "file": "sessions\\{{curr_acc}}.sess"},
+        {"action": "log", "text": "AUTH OK {{curr_acc}}"},
+        {"action": "browser.quit"}
+      ]
+    },
+    {
+      "name": "sender_master",
+      "thread_pool": 30,
+      "loop_list": "recipients",
+      "loop_var": "curr_mail",
+      "commands": [
+        {"action": "thread.get_free_account", "from": "accounts", "to": "curr_acc"},
+        {"action": "thread.get_free_proxy", "from": "proxies", "to": "curr_proxy"},
+        {"action": "proxy.set", "proxy_string": "curr_proxy", "type": "http"},
+        {"action": "fingerprint.randomize"},
+        {"action": "browser.start", "profile": "curr_acc", "size": "random", "webrtc": "disable"},
+        {"action": "browser.load_session", "file": "sessions\\{{curr_acc}}.sess"},
+        {"action": "page.navigate", "url": "https://mail.google.com/mail/u/0/#inbox"},
+        {"action": "wait.selector", "selector": ".T-I.T-I-KE.L3", "timeout": 15},
+        {"action": "element.click", "selector": ".T-I.T-I-KE.L3"},
+        {"action": "wait.selector", "selector": "textarea[name=to]", "timeout": 10},
+        {"action": "element.type", "selector": "textarea[name=to]", "text": "curr_mail.split(',')[0]"},
+        {"action": "element.type", "selector": "input[name=subjectbox]", "text": "Спинтакс(Тема)"},
+        {"action": "element.type_html", "selector": "div[role=textbox]", "text": "Спинтакс(HTMLписьмо)"},
+        {"action": "delay", "min": 2000, "max": 5000},
+        {"action": "element.click", "selector": "div[role=button][aria-label*='Отправить']"},
+        {"action": "captcha.solve_if_appears", "service": "rucaptcha", "key": "ruCaptchaKey", "timeout": 120},
+        {"action": "wait.selector_missing", "selector": "div[role=progressbar]", "timeout": 30},
+        {"action": "log", "text": "SENT {{curr_mail}} from {{curr_acc}}"},
+        {"action": "counter.inc", "var": "daily_sent"},
+        {"action": "excel.append", "file": "reports\\report.xlsx", "row": ["{{date}}", "{{curr_acc}}", "{{curr_mail}}", "sent"]},
+        {"action": "delay", "min": 30000, "max": 90000},
+        {"action": "browser.quit"},
+        {"action": "if", "condition": "daily_sent >= daily_limit", "then": [{"action": "thread.pause_account", "account": "curr_acc", "hours": 24}]}
+      ]
+    }
+  ],
+  "start_module": "read_files",
+  "flow": ["read_files", "auth_worker", "sender_master"]
+}
